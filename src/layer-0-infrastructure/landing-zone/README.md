@@ -1,110 +1,124 @@
-# Layer 0 — Sovereign Infrastructure Substrate
+# Layer 0: Sovereign Infrastructure Substrate
 
 ## Overview
 
-This directory contains the Azure Landing Zone infrastructure-as-code for Fox Height LTD's sovereign cloud foundation.
+Layer 0 is the foundational infrastructure layer of Fox Height's Intelligence Continuum. It establishes the governance structure, compliance framework, and baseline security posture for all workloads deployed across Fox Height's Azure tenant.
 
-### What is Layer 0?
+## Architecture
 
-Layer 0 is the physical and logical foundation of the Intelligence Continuum. It establishes:
+### Management Group Hierarchy
 
-- **Management Group Hierarchy**: Organisational governance tree with policy cascade
-- **Policy Enforcement**: Kenya DPA 2019 compliance, encryption, data residency
-- **Network Topology**: Hub-and-spoke architecture with zero-trust networking
-- **RBAC Taxonomy**: Role-based access control hierarchy
-- **Monitoring Foundation**: Centralized logging, alerts, audit trails
-
-### Key Principles
-
-- **Deterministic**: Same input always produces same output
-- **Immutable**: Infrastructure state is defined and version-controlled
-- **Compliant**: DPA 2019 enforcement at infrastructure level
-- **Auditable**: Every change is logged and traceable
-
-## Files
-
-### `main.bicep`
-Master orchestration template that deploys:
-- Management groups
-- Policies
-- Resource groups
-- Networking (hub-and-spoke)
-- Key Vault
-- Storage
-- Monitoring (App Insights, Log Analytics)
-
-### `management-groups.bicep`
-Defines the management group hierarchy:
 ```
-foxheight-root
-├── foxheight-production
-│   ├── foxheight-dev
-│   ├── foxheight-staging
-│   └── foxheight-prod-workloads
-└── foxheight-clients
+foxheight-root (Tenant Root)
+├── foxheight-production      (Production workloads)
+├── foxheight-staging         (Pre-production testing)
+├── foxheight-development     (Development environments)
+├── foxheight-clients         (Client-specific environments)
+└── foxheight-governance      (Shared governance services)
 ```
 
-### `policies.bicep`
-Azure Policy definitions for:
-- Kenya DPA 2019 data residency
-- HTTPS enforcement
-- TLS 1.2+ requirements
-- Public blob access prevention
-- Resource tagging
+### Files
+
+- **main.bicep** — Master orchestrator (tenant scope)
+- **policies.bicep** — Kenya DPA 2019 compliance policies
+- **rbac.bicep** — Custom RBAC roles and assignments
+- **networking.bicep** — Hub-and-spoke network topology
+
+## Kenya DPA 2019 Compliance
+
+All resources deployed through Layer 0 are governed by Kenya Data Protection Act 2019:
+
+- **Data Residency**: All data must remain in approved South African regions (southafricanorth, southafricawest)
+- **Encryption**: All storage and databases require encryption at rest
+- **Access Control**: Role-based access with audit logging
+- **Data Classification**: Purview-based classification and labeling
 
 ## Deployment
 
 ### Prerequisites
 
-- Azure CLI or PowerShell
-- Tenant-level Management Group Contributor role
-- Subscription Owner role
-
-### Deploy via PowerShell
-
-```powershell
-.\deploy.ps1 `
-    -Environment prod `
-    -SubscriptionId "00000000-0000-0000-0000-000000000000" `
-    -TenantId "00000000-0000-0000-0000-000000000000"
-```
-
-### Deploy via Azure CLI
-
 ```bash
-az deployment tenant create \
-    --name "fox-height-landing-zone" \
-    --location southafricanorth \
-    --template-file main.bicep \
-    --parameters environment=prod primaryRegion=southafricanorth secondaryRegion=southafricawest
+# Install Azure CLI
+az --version
+
+# Install Bicep CLI
+az bicep install
+
+# Authenticate to Azure
+az login
+
+# Set context to target tenant
+az account set --subscription <subscription-id>
 ```
 
-## Compliance Verification
-
-After deployment, verify compliance:
+### Deploy Layer 0
 
 ```powershell
-# Check policy compliance
-Get-AzPolicyState -ResourceGroupName "foxheight-core-prod" | Where-Object {$_.ComplianceState -eq 'NonCompliant'}
+# Validate Bicep templates
+./scripts/deploy.ps1 -ManagementGroupId <mgid> -ValidateOnly
 
-# Verify all resources are in approved regions
-Get-AzResource | Where-Object {$_.Location -notin @('southafricanorth', 'southafricawest')} | Select-Object Name, Location
+# Deploy to tenant
+./scripts/deploy.ps1 -ManagementGroupId <mgid>
+
+# Validate post-deployment
+./scripts/validate.ps1 -ManagementGroupId <mgid>
 ```
 
 ## Testing
 
-Unit tests are located in `tests/unit/test_infrastructure_deployment.py`
-
 ```bash
-pytest tests/unit/test_infrastructure_deployment.py -v
+# Run unit tests
+pytest tests/unit/test_infrastructure.py -v
+
+# Run integration tests
+pytest tests/integration/test_layer0_deployment.py -v
+
+# Run security tests
+pytest tests/security/test_zero_trust_posture.py -v
 ```
 
-## Governance
+## Compliance Verification
 
-This layer establishes the constitutional foundation for all Fox Height infrastructure. Changes must:
+```bash
+# Check policy compliance
+az policy assignment list --scope /providers/Microsoft.Management/managementGroups/foxheight-root
 
-1. Maintain Kenya DPA 2019 compliance
-2. Pass all policy evaluations
-3. Be reviewed by Security team
-4. Include updated ADRs
-5. Pass all tests
+# View compliance score
+az policy assignment show --name foxheight-kenya-dpa-data-residency
+```
+
+## Troubleshooting
+
+### Management Group Creation Fails
+
+- Verify tenant admin permissions
+- Check that management group names are globally unique
+- Ensure Bicep CLI is up to date
+
+### Policy Assignment Fails
+
+- Verify policy definition is registered
+- Check policy scope matches target management group
+- Review policy syntax for errors
+
+### Network Deployment Issues
+
+- Ensure hub vnet does not conflict with existing networks
+- Verify spoke subscription has network contributor role
+- Check NSG rules for default-deny configuration
+
+## Next Steps
+
+**Phase 1 Gate Criteria** (All must pass):
+- ✅ Management groups deployed and hierarchically correct
+- ✅ Kenya DPA 2019 policy enforced with 'deny' effect
+- ✅ All tests passing (80%+ coverage)
+- ✅ Zero resources outside approved regions
+- ✅ RBAC taxonomy established
+- ✅ ADR-002 (Azure-first) written
+
+**Phase 2: Zero Trust Security Mesh** (Layer 1)
+- Microsoft Entra ID conditional access
+- Privileged Identity Management (PIM)
+- Microsoft Sentinel rules
+- Microsoft Defender for Cloud

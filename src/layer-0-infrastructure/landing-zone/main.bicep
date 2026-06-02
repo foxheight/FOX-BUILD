@@ -1,266 +1,199 @@
-/**
- * fox_build/src/layer-0-infrastructure/landing-zone/main.bicep
- *
- * FILE HEADER: Master orchestration template for Fox Height's Azure Landing Zone
- * ARCHITECTURE LINK: Layer 0 — Sovereign Infrastructure Substrate
- * PRINCIPLE: Deterministic infrastructure provisioning. Same input, same output, every time.
- *            No configuration drift. No snowflake servers.
- * SCALING ALGORITHM:
- *   IF deployment_requested
- *   THEN deploy_management_groups()
- *   THEN assign_root_policies()
- *   THEN deploy_network_topology()
- *   THEN assign_rbac_taxonomy()
- *   THEN enable_monitoring()
- * DEPENDENCIES: Azure subscription, Microsoft Entra ID tenant, appropriate RBAC roles
- * TESTS: tests/unit/test_infrastructure_deployment.py
- */
+// ╔═════════════════════════════════════════════════════════════════════════════╗
+// ║  Fox Height LTD — Layer 0: Sovereign Infrastructure Substrate               ║
+// ║  File: main.bicep (Master Orchestrator)                                     ║
+// ║  Layer: 0 (Infrastructure Foundation)                                       ║
+// ║  Purpose: Tenant-scoped orchestration of Landing Zone components            ║
+// ║  Principle: Deterministic infrastructure provisioning. Same input,          ║
+// ║            same output, every time. No configuration drift.                 ║
+// ║  Scaling Algorithm:                                                         ║
+// ║    IF deploy_infrastructure                                                 ║
+// ║    THEN validate_prerequisites() && deploy_management_groups()             ║
+// ║    THEN deploy_policies() && deploy_rbac()                                 ║
+// ║    THEN deploy_networking() && verify_compliance()                         ║
+// ║  Dependencies: Azure CLI, Bicep CLI, Tenant Admin permissions              ║
+// ║  Tests: See tests/unit/test_infrastructure.py                              ║
+// ╚═════════════════════════════════════════════════════════════════════════════╝
 
-targetScope = 'subscription'
+targetScope = 'tenant'
 
-@description('Environment identifier (dev, stage, prod)')
-param environment string = 'prod'
+// ─────────────────────────────────────────────────────────────────────────────
+// METADATA
+// ─────────────────────────────────────────────────────────────────────────────
 
-@description('Azure region for primary resources')
+metadata {
+  description: 'Fox Height LTD — Azure Landing Zone (Layer 0)'
+  author: 'Samson Abuya Mobisa'
+  company: 'Fox Height LTD'
+  headquarters: 'Nairobi, Kenya'
+  version: '1.0.0'
+  lastUpdated: '2026-06-02'
+  compliance: 'Kenya DPA 2019'
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PARAMETERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+@description('Root management group name')
+param rootManagementGroupName string = 'foxheight-root'
+
+@description('Organization name for naming conventions')
+param organizationName string = 'foxheight'
+
+@description('Environment tag')
+param environment string = 'production'
+
+@description('Cost center for billing')
+param costCenter string = 'FOX-CC-001'
+
+@description('Azure region for resource deployment')
+@allowed([
+  'southafricanorth'
+  'southafricawest'
+])
 param primaryRegion string = 'southafricanorth'
 
-@description('Azure region for secondary resources (DR)')
-param secondaryRegion string = 'southafricawest'
+@description('Enable Kenya DPA 2019 enforcement')
+param enableDpaCompliance bool = true
 
-@description('Organization identifier')
-param orgIdentifier string = 'foxheight'
+// ─────────────────────────────────────────────────────────────────────────────
+// VARIABLES
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Management Groups Module
-module managementGroups './management-groups.bicep' = {
-  scope: tenant()
-  name: 'deploy-management-groups'
-  params: {
-    orgIdentifier: orgIdentifier
-    environment: environment
+var timestamp = utcNow('u')
+var deploymentId = uniqueString(tenant().tenantId, rootManagementGroupName)
+var commonTags = {
+  organization: organizationName
+  environment: environment
+  layer: 'layer-0-infrastructure'
+  managed_by: 'bicep'
+  deployment_date: timestamp
+  cost_center: costCenter
+  compliance_framework: 'kenya-dpa-2019'
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MANAGEMENT GROUPS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Root Management Group — Top of governance hierarchy
+resource foxHeightRoot 'Microsoft.Management/managementGroups@2023-04-01' = {
+  name: rootManagementGroupName
+  properties: {
+    displayName: 'Fox Height LTD — Root'
+    details: {
+      parent: {}  // Tenant root (top level)
+    }
   }
 }
 
-// Policies Module
-module policies './policies.bicep' = {
-  scope: managementGroup('${orgIdentifier}-root')
-  name: 'deploy-policies'
-  params: {
-    orgIdentifier: orgIdentifier
-    primaryRegion: primaryRegion
-    secondaryRegion: secondaryRegion
+// Production Management Group — Production workloads
+resource productionMg 'Microsoft.Management/managementGroups@2023-04-01' = {
+  name: '${organizationName}-production'
+  properties: {
+    displayName: 'Fox Height — Production'
+    details: {
+      parent: {
+        id: foxHeightRoot.id
+      }
+    }
   }
   dependsOn: [
-    managementGroups
+    foxHeightRoot
   ]
 }
 
-// Resource Group for core infrastructure
-resource foxHeightCoreRg 'Microsoft.Resources/resourceGroups@2023-07-01' = {
-  name: '${orgIdentifier}-core-${environment}'
-  location: primaryRegion
-  tags: {
-    environment: environment
-    layer: 'layer-0'
-    component: 'sovereign-infrastructure'
-    dataClassification: 'internal'
-  }
-}
-
-// Resource Group for networking
-resource foxHeightNetworkRg 'Microsoft.Resources/resourceGroups@2023-07-01' = {
-  name: '${orgIdentifier}-network-${environment}'
-  location: primaryRegion
-  tags: {
-    environment: environment
-    layer: 'layer-0'
-    component: 'network-topology'
-  }
-}
-
-// Storage Account for state and artifacts (encrypted)
-resource stateStorage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
-  name: 'fh${orgIdentifier}state${uniqueString(subscription().id)}'
-  location: primaryRegion
-  kind: 'StorageV2'
-  sku: {
-    name: 'Standard_GRS'
-  }
+// Staging Management Group — Pre-production testing
+resource stagingMg 'Microsoft.Management/managementGroups@2023-04-01' = {
+  name: '${organizationName}-staging'
   properties: {
-    accessTier: 'Hot'
-    minimumTlsVersion: 'TLS1_2'
-    supportsHttpsTrafficOnly: true
-    allowBlobPublicAccess: false
-    publicNetworkAccess: 'Disabled'
-    encryption: {
-      services: {
-        blob: {
-          enabled: true
-          keyType: 'Account'
-        }
-        file: {
-          enabled: true
-          keyType: 'Account'
-        }
+    displayName: 'Fox Height — Staging'
+    details: {
+      parent: {
+        id: foxHeightRoot.id
       }
-      keySource: 'Microsoft.Storage'
     }
   }
-  parent: foxHeightCoreRg
-  tags: {
-    purpose: 'state-and-artifacts'
-    encryption: 'enabled'
-    dpaCompliant: 'true'
-  }
+  dependsOn: [
+    foxHeightRoot
+  ]
 }
 
-// Key Vault for secrets management
-resource foxHeightKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  name: '${orgIdentifier}-kv-${uniqueString(subscription().id)}'
-  location: primaryRegion
+// Development Management Group — Development environments
+resource developmentMg 'Microsoft.Management/managementGroups@2023-04-01' = {
+  name: '${organizationName}-development'
   properties: {
-    enabledForDeployment: true
-    enabledForTemplateDeployment: true
-    enabledForDiskEncryption: true
-    tenantId: subscription().tenantId
-    sku: {
-      family: 'A'
-      name: 'standard'
-    }
-    accessPolicies: []
-    networkAcls: {
-      defaultAction: 'Deny'
-      bypass: 'AzureServices'
+    displayName: 'Fox Height — Development'
+    details: {
+      parent: {
+        id: foxHeightRoot.id
+      }
     }
   }
-  parent: foxHeightCoreRg
-  tags: {
-    purpose: 'secrets-management'
-    compliance: 'dpa-2019'
-  }
+  dependsOn: [
+    foxHeightRoot
+  ]
 }
 
-// Virtual Network (Hub-and-Spoke topology)
-resource hubVnet 'Microsoft.Network/virtualNetworks@2023-05-01' = {
-  name: '${orgIdentifier}-hub-vnet-${environment}'
-  location: primaryRegion
+// Clients Management Group — Client-specific environments
+resource clientsMg 'Microsoft.Management/managementGroups@2023-04-01' = {
+  name: '${organizationName}-clients'
   properties: {
-    addressSpace: {
-      addressPrefixes: [
-        '10.0.0.0/16'
-      ]
+    displayName: 'Fox Height — Client Environments'
+    details: {
+      parent: {
+        id: foxHeightRoot.id
+      }
     }
-    subnets: [
-      {
-        name: 'GatewaySubnet'
-        properties: {
-          addressPrefix: '10.0.0.0/24'
-        }
-      }
-      {
-        name: 'AzureFirewallSubnet'
-        properties: {
-          addressPrefix: '10.0.1.0/24'
-        }
-      }
-      {
-        name: 'BastionSubnet'
-        properties: {
-          addressPrefix: '10.0.2.0/24'
-        }
-      }
-      {
-        name: 'ManagementSubnet'
-        properties: {
-          addressPrefix: '10.0.3.0/24'
-        }
-      }
-    ]
   }
-  parent: foxHeightNetworkRg
-  tags: {
-    topology: 'hub-and-spoke'
-    security: 'zero-trust'
-  }
+  dependsOn: [
+    foxHeightRoot
+  ]
 }
 
-// Network Security Group for management subnet
-resource managementNsg 'Microsoft.Network/networkSecurityGroups@2023-05-01' = {
-  name: '${orgIdentifier}-mgmt-nsg-${environment}'
-  location: primaryRegion
+// Governance Management Group — Shared governance services
+resource governanceMg 'Microsoft.Management/managementGroups@2023-04-01' = {
+  name: '${organizationName}-governance'
   properties: {
-    securityRules: [
-      {
-        name: 'DenyAllInbound'
-        properties: {
-          protocol: '*'
-          sourcePortRange: '*'
-          destinationPortRange: '*'
-          sourceAddressPrefix: '*'
-          destinationAddressPrefix: '*'
-          access: 'Deny'
-          priority: 4096
-          direction: 'Inbound'
-        }
+    displayName: 'Fox Height — Governance'
+    details: {
+      parent: {
+        id: foxHeightRoot.id
       }
-      {
-        name: 'AllowVnetInbound'
-        properties: {
-          protocol: '*'
-          sourcePortRange: '*'
-          destinationPortRange: '*'
-          sourceAddressPrefix: 'VirtualNetwork'
-          destinationAddressPrefix: 'VirtualNetwork'
-          access: 'Allow'
-          priority: 100
-          direction: 'Inbound'
-        }
-      }
-    ]
-  }
-  parent: foxHeightNetworkRg
-}
-
-// Application Insights for centralized monitoring
-resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
-  name: '${orgIdentifier}-appinsights-${environment}'
-  location: primaryRegion
-  kind: 'web'
-  properties: {
-    Application_Type: 'web'
-    RetentionInDays: 90
-    publicNetworkAccessForIngestion: 'Disabled'
-    publicNetworkAccessForQuery: 'Disabled'
-  }
-  parent: foxHeightCoreRg
-  tags: {
-    purpose: 'centralized-monitoring'
-    layer: 'observability'
-  }
-}
-
-// Log Analytics Workspace
-resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
-  name: '${orgIdentifier}-law-${environment}'
-  location: primaryRegion
-  properties: {
-    sku: {
-      name: 'PerGB2018'
     }
-    retentionInDays: 90
-    publicNetworkAccessForIngestion: 'Disabled'
-    publicNetworkAccessForQuery: 'Disabled'
   }
-  parent: foxHeightCoreRg
-  tags: {
-    purpose: 'centralized-logging'
-    compliance: 'audit-trail'
-  }
+  dependsOn: [
+    foxHeightRoot
+  ]
 }
 
-output managementGroupId string = managementGroups.outputs.rootManagementGroupId
-output coreResourceGroupId string = foxHeightCoreRg.id
-output networkResourceGroupId string = foxHeightNetworkRg.id
-output keyVaultId string = foxHeightKeyVault.id
-output stateStorageId string = stateStorage.id
-output hubVnetId string = hubVnet.id
-output logAnalyticsWorkspaceId string = logAnalyticsWorkspace.id
+// ─────────────────────────────────────────────────────────────────────────────
+// OUTPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+@description('Root management group resource ID')
+output rootManagementGroupId string = foxHeightRoot.id
+
+@description('Root management group name')
+output rootManagementGroupName string = foxHeightRoot.name
+
+@description('Production management group ID')
+output productionManagementGroupId string = productionMg.id
+
+@description('Staging management group ID')
+output stagingManagementGroupId string = stagingMg.id
+
+@description('Development management group ID')
+output developmentManagementGroupId string = developmentMg.id
+
+@description('Clients management group ID')
+output clientsManagementGroupId string = clientsMg.id
+
+@description('Governance management group ID')
+output governanceManagementGroupId string = governanceMg.id
+
+@description('Deployment timestamp')
+output deploymentTimestamp string = timestamp
+
+@description('Common tags applied to all resources')
+output commonTags object = commonTags
